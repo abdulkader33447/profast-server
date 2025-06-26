@@ -6,6 +6,8 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 // load env variables
 dotenv.config();
 
+const stripe = require("stripe")(process.env.PAYMENT_GATEWAY_KEY);
+
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -31,8 +33,6 @@ async function run() {
 
     const db = client.db("parcelDB");
     const parcelCollection = db.collection("parcels");
-
-    
 
     // parcels api
     app.get("/parcels", async (req, res) => {
@@ -75,6 +75,25 @@ async function run() {
       }
     });
 
+    // Assuming: parcelCollection is your MongoDB collection
+    app.get("/parcels/:id", async (req, res) => {
+      const id = req.params.id;
+      try {
+        const parcel = await parcelCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!parcel) {
+          return res.status(404).json({ message: "Parcel not found" });
+        }
+
+        res.json(parcel);
+      } catch (error) {
+        console.error("Error fetching parcel:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
     //delete data from db
     app.delete("/parcels/:id", async (req, res) => {
       const id = req.params.id;
@@ -86,6 +105,63 @@ async function run() {
         res.send({ success: true });
       } else {
         res.status(404).send({ success: false, message: "Parcel not found" });
+      }
+    });
+
+    app.post("/confirm-payment", async (req, res) => {
+  const {
+    parcelId,
+    userEmail,
+    transactionId,
+    amount,
+    paymentMethod,
+    paymentTime,
+  } = req.body;
+
+  try {
+    // 1️⃣ Update parcel status
+    const updateResult = await parcelCollection.updateOne(
+      { _id: new ObjectId(parcelId) },
+      { $set: { payment_status: "paid", transactionId } }
+    );
+
+    // 2️⃣ Save to payments collection
+    const paymentData = {
+      parcelId: new ObjectId(parcelId),
+      userEmail,
+      transactionId,
+      amount,
+      paymentMethod,
+      paymentTime: paymentTime || new Date(), // fallback to now
+    };
+
+    const insertResult = await paymentCollection.insertOne(paymentData);
+
+    res.send({
+      success: true,
+      message: "Payment confirmed and history saved",
+      updateResult,
+      insertResult,
+    });
+  } catch (err) {
+    console.error("Error confirming payment:", err.message);
+    res.status(500).send({ success: false, error: err.message });
+  }
+});
+
+
+    app.post("/create-payment-intent", async (req, res) => {
+      const amountInCents = req.body.amountInCents
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amountInCents, // amount in cents
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+
+        res.json({ clientSecret: paymentIntent.client_secret });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
       }
     });
 
