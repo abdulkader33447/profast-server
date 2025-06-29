@@ -68,6 +68,54 @@ async function run() {
       // console.log("headers in middleware", req.headers);
     };
 
+    //admin role
+    app.get("/user/search", async (req, res) => {
+      const emailQuery = req.query.email;
+      if (!emailQuery) {
+        return res.status(400).send({ message: "Missing email query" });
+      }
+
+      const regex = new RegExp(emailQuery, "i"); // case-insensitive partial match
+
+      try {
+        const users = await usersCollection
+          .find({ email: { $regex: regex } })
+          .project({ email: 1, created_at: 1, role: 1 })
+          .limit(10)
+          .toArray();
+        res.send(users);
+      } catch (error) {
+        console.error("error searching user", error);
+        res.status(500).send({ message: "Error searching users" });
+      }
+    });
+
+    // Example: Express route to update user role by email
+    app.patch("/users/:email/role", async (req, res) => {
+      const email = req.params.email;
+      const { role } = req.body;
+
+      if (!["admin", "user"].includes(role)) {
+        return res.status(400).send({ message: "Invalid role value" });
+      }
+
+      try {
+        const result = await usersCollection.updateOne(
+          { email },
+          { $set: { role } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "User not found" });
+        }
+
+        res.send({ message: "User role updated successfully" });
+      } catch (error) {
+        console.error("Error updating user role:", error);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     //user already exists or not
     app.post("/users", async (req, res) => {
       const email = req.body.email;
@@ -205,7 +253,7 @@ async function run() {
     // update rider status (approved, pending, cancelled)
     app.patch("/riders/:id/status", async (req, res) => {
       const riderId = req.params.id;
-      const { status } = req.body;
+      const { status, email } = req.body;
 
       const validStatuses = ["approved", "pending", "inactive", "cancelled"];
       if (!validStatuses.includes(status)) {
@@ -215,6 +263,8 @@ async function run() {
       // 📌 Approve হলে approvedAt টাইমও সেট করো
       const updateFields = { status };
       if (status === "approved") {
+        //update user role for accepting rider
+
         updateFields.approvedAt = new Date().toLocaleString("en-US", {
           timeZone: "Asia/Dhaka",
           year: "numeric",
@@ -224,7 +274,28 @@ async function run() {
           minute: "2-digit",
           hour12: true,
         });
+        if (email) {
+          await usersCollection.updateOne(
+            { email },
+            { $set: { role: "rider" } }
+          );
+        }
       }
+
+      // if (status === " approved") {
+      //   // updateFields.role = "rider";
+      //   const useQuery = { email };
+      //   const userUpdateDoc = {
+      //     $set: {
+      //       role: "rider",
+      //     },
+      //   };
+      //   const roleResult = await usersCollection.updateOne(
+      //     useQuery,
+      //     userUpdateDoc
+      //   );
+      //   console.log(roleResult.modifiedCount);
+      // }
 
       try {
         const result = await ridersCollection.updateOne(
