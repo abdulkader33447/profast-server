@@ -194,13 +194,20 @@ async function run() {
       }
     });
 
-    //update status
+    //get approved riders
+    app.get("/riders/active", async (req, res) => {
+      const result = await ridersCollection
+        .find({ status: "approved" })
+        .toArray();
+      res.send(result);
+    });
+
     // update rider status (approved, pending, cancelled)
     app.patch("/riders/:id/status", async (req, res) => {
       const riderId = req.params.id;
       const { status } = req.body;
 
-      const validStatuses = ["approved", "pending", "cancelled"];
+      const validStatuses = ["approved", "pending", "inactive", "cancelled"];
       if (!validStatuses.includes(status)) {
         return res.status(400).json({ message: "Invalid status value" });
       }
