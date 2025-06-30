@@ -45,7 +45,7 @@ async function run() {
     const trackingCollection = db.collection("tracking");
     const ridersCollection = db.collection("riders");
 
-    //custom middlewares
+    //---------custom middlewares-------
     const verifyFBToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
       if (!authHeader) {
@@ -68,7 +68,20 @@ async function run() {
       // console.log("headers in middleware", req.headers);
     };
 
-    //admin role
+    //admin verification function
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+    //---------custom middlewares-------
+
+    //get user for changing role
     app.get("/user/search", async (req, res) => {
       const emailQuery = req.query.email;
       if (!emailQuery) {
@@ -90,28 +103,54 @@ async function run() {
       }
     });
 
-    // Example: Express route to update user role by email
-    app.patch("/users/:email/role", async (req, res) => {
-      const email = req.params.email;
-      const { role } = req.body;
+    // Example: Express api to update user role by email
+    app.patch(
+      "/users/:email/role",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const email = req.params.email;
+        const { role } = req.body;
 
-      if (!["admin", "user"].includes(role)) {
-        return res.status(400).send({ message: "Invalid role value" });
+        if (!["admin", "user"].includes(role)) {
+          return res.status(400).send({ message: "Invalid role value" });
+        }
+
+        try {
+          const result = await usersCollection.updateOne(
+            { email },
+            { $set: { role } }
+          );
+
+          if (result.matchedCount === 0) {
+            return res.status(404).send({ message: "User not found" });
+          }
+
+          res.send({ message: "User role updated successfully" });
+        } catch (error) {
+          console.error("Error updating user role:", error);
+          res.status(500).send({ message: "Server error" });
+        }
+      }
+    );
+
+    //get users based on role
+    app.get("/user/role", async (req, res) => {
+      const email = req.query.email;
+      if (!email) {
+        return res.status(400).send({ message: "Email query is required" });
       }
 
       try {
-        const result = await usersCollection.updateOne(
-          { email },
-          { $set: { role } }
-        );
+        const user = await usersCollection.findOne({ email });
 
-        if (result.matchedCount === 0) {
+        if (!user) {
           return res.status(404).send({ message: "User not found" });
         }
 
-        res.send({ message: "User role updated successfully" });
+        res.send({ role: user.role || "user" });
       } catch (error) {
-        console.error("Error updating user role:", error);
+        console.error("Error fetching role:", error);
         res.status(500).send({ message: "Server error" });
       }
     });
@@ -147,24 +186,56 @@ async function run() {
     });
 
     // parcels api
+    // app.get("/parcels", verifyFBToken, async (req, res) => {
+    //   try {
+    //     const { email } = req.query.email;
+
+    //     // যদি email দেওয়া থাকে, created_by দিয়ে ফিল্টার করবে, না থাকলে সব দেখাবে
+    //     const query = email ? { created_by: email } : {};
+
+    //     console.log("parcel query", req.query, query);
+    //     // সর্বশেষ parcel আগে দেখানোর জন্য sorted
+    //     const parcels = await parcelCollection
+    //       .find(query)
+    //       .sort({ createdAt: -1 }) // latest first
+    //       .toArray();
+
+    //     res.status(200).json(parcels);
+    //   } catch (error) {
+    //     console.error("GET /parcels error:", error);
+    //     res.status(500).json({ error: "Failed to get parcels" });
+    //   }
+    // });
+
     app.get("/parcels", verifyFBToken, async (req, res) => {
       try {
-        const { email } = req.query;
-        console.log(email);
+        const { email, payment_status, delivery_status } = req.query;
 
-        // যদি email দেওয়া থাকে, created_by দিয়ে ফিল্টার করবে, না থাকলে সব দেখাবে
-        const query = email ? { created_by: email } : {};
+        const query = {}; // শুরুতেই খালি অবজেক্ট
 
-        // সর্বশেষ parcel আগে দেখানোর জন্য sorted
-        const parcels = await parcelCollection
-          .find(query)
-          .sort({ createdAt: -1 }) // latest first
-          .toArray();
+        if (email) {
+          query.created_by = email; // শুধু প্রপার্টি অ্যাসাইন
+        }
 
-        res.status(200).json(parcels);
+        if (payment_status) {
+          query.payment_status = payment_status;
+        }
+
+        if (delivery_status) {
+          query.delivery_status = delivery_status;
+        }
+
+        const options = {
+          sort: { createdAt: -1 },
+        };
+
+        console.log("parcel query", req.query, query);
+
+        const parcels = await parcelCollection.find(query, options).toArray();
+        res.send(parcels);
       } catch (error) {
-        console.error("GET /parcels error:", error);
-        res.status(500).json({ error: "Failed to get parcels" });
+        console.error("error fetching parcels:", error);
+        res.status(500).send({ message: "failed to get parcels" });
       }
     });
 
@@ -174,8 +245,8 @@ async function run() {
     //   res.send(parcels);
     // });
 
-    //add data to db
-    app.post("/parcels", async (req, res) => {
+    //add parcel data to db
+    app.post("/parcels", verifyFBToken, async (req, res) => {
       try {
         const newParcel = req.body;
 
@@ -207,7 +278,7 @@ async function run() {
     });
 
     //delete data from db
-    app.delete("/parcels/:id", async (req, res) => {
+    app.delete("/parcels/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const result = await parcelCollection.deleteOne({
         _id: new ObjectId(id),
@@ -228,7 +299,7 @@ async function run() {
     });
 
     // get pending riders
-    app.get("/riders/pending", async (req, res) => {
+    app.get("/riders/pending", verifyFBToken, verifyAdmin, async (req, res) => {
       try {
         const pendingRiders = await ridersCollection
           .find({ status: "pending" })
@@ -243,7 +314,7 @@ async function run() {
     });
 
     //get approved riders
-    app.get("/riders/active", async (req, res) => {
+    app.get("/riders/active", verifyFBToken, verifyAdmin, async (req, res) => {
       const result = await ridersCollection
         .find({ status: "approved" })
         .toArray();
@@ -251,72 +322,77 @@ async function run() {
     });
 
     // update rider status (approved, pending, cancelled)
-    app.patch("/riders/:id/status", async (req, res) => {
-      const riderId = req.params.id;
-      const { status, email } = req.body;
+    app.patch(
+      "/riders/:id/status",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const riderId = req.params.id;
+        const { status, email } = req.body;
 
-      const validStatuses = ["approved", "pending", "inactive", "cancelled"];
-      if (!validStatuses.includes(status)) {
-        return res.status(400).json({ message: "Invalid status value" });
-      }
+        const validStatuses = ["approved", "pending", "inactive", "cancelled"];
+        if (!validStatuses.includes(status)) {
+          return res.status(400).json({ message: "Invalid status value" });
+        }
 
-      // 📌 Approve হলে approvedAt টাইমও সেট করো
-      const updateFields = { status };
-      if (status === "approved") {
-        //update user role for accepting rider
+        // 📌 Approve হলে approvedAt টাইমও সেট করো
+        const updateFields = { status };
+        if (status === "approved") {
+          //update user role for accepting rider
 
-        updateFields.approvedAt = new Date().toLocaleString("en-US", {
-          timeZone: "Asia/Dhaka",
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: true,
-        });
-        if (email) {
-          await usersCollection.updateOne(
-            { email },
-            { $set: { role: "rider" } }
+          updateFields.approvedAt = new Date().toLocaleString("en-US", {
+            timeZone: "Asia/Dhaka",
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: true,
+          });
+          if (email) {
+            await usersCollection.updateOne(
+              { email },
+              { $set: { role: "rider" } }
+            );
+          }
+        }
+
+        // if (status === " approved") {
+        //   // updateFields.role = "rider";
+        //   const useQuery = { email };
+        //   const userUpdateDoc = {
+        //     $set: {
+        //       role: "rider",
+        //     },
+        //   };
+        //   const roleResult = await usersCollection.updateOne(
+        //     useQuery,
+        //     userUpdateDoc
+        //   );
+        //   console.log(roleResult.modifiedCount);
+        // }
+
+        try {
+          const result = await ridersCollection.updateOne(
+            { _id: new ObjectId(riderId) },
+            { $set: updateFields }
           );
+
+          if (result.matchedCount === 0) {
+            return res.status(404).json({ message: "Rider not found" });
+          }
+
+          res
+            .status(200)
+            .json({ message: `Rider status updated to '${status}'` });
+        } catch (error) {
+          console.error("Error updating rider status:", error);
+          res
+            .status(500)
+            .json({ message: "Server error while updating rider status" });
         }
       }
-
-      // if (status === " approved") {
-      //   // updateFields.role = "rider";
-      //   const useQuery = { email };
-      //   const userUpdateDoc = {
-      //     $set: {
-      //       role: "rider",
-      //     },
-      //   };
-      //   const roleResult = await usersCollection.updateOne(
-      //     useQuery,
-      //     userUpdateDoc
-      //   );
-      //   console.log(roleResult.modifiedCount);
-      // }
-
-      try {
-        const result = await ridersCollection.updateOne(
-          { _id: new ObjectId(riderId) },
-          { $set: updateFields }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ message: "Rider not found" });
-        }
-
-        res
-          .status(200)
-          .json({ message: `Rider status updated to '${status}'` });
-      } catch (error) {
-        console.error("Error updating rider status:", error);
-        res
-          .status(500)
-          .json({ message: "Server error while updating rider status" });
-      }
-    });
+    );
 
     //---------------------------------------
 
