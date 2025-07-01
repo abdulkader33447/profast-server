@@ -314,11 +314,66 @@ async function run() {
     });
 
     //get approved riders
+    // app.get("/riders/active", verifyFBToken, verifyAdmin, async (req, res) => {
+    //   const result = await ridersCollection
+    //     .find({ status: "approved" })
+    //     .toArray();
+    //   res.send(result);
+    // });
+
     app.get("/riders/active", verifyFBToken, verifyAdmin, async (req, res) => {
-      const result = await ridersCollection
-        .find({ status: "approved" })
-        .toArray();
-      res.send(result);
+      const { district, city } = req.query;
+
+      const query = { status: "approved" };
+      if (district) query.district = district;
+      if (city) query.city = city;
+
+      try {
+        const result = await ridersCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching active riders:", error);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // assign rider
+    app.patch("/parcels/:id/assign-rider", async (req, res) => {
+      const parcelId = req.params.id;
+      const { riderId } = req.body;
+
+      try {
+        // 1️⃣ Update parcel with assigned rider and in-transit status
+        const parcelUpdateResult = await parcelCollection.updateOne(
+          { _id: new ObjectId(parcelId) },
+          {
+            $set: {
+              assignedRider: new ObjectId(riderId),
+              riderAssignedAt: new Date(),
+              delivery_status: "in-transit", // 🟡 updated
+            },
+          }
+        );
+
+        // 2️⃣ Update rider's work_status
+        const riderUpdateResult = await ridersCollection.updateOne(
+          { _id: new ObjectId(riderId) },
+          {
+            $set: {
+              work_status: "in-delivery", // 🟢 new status
+            },
+          }
+        );
+
+        res.send({
+          success: true,
+          parcelUpdate: parcelUpdateResult,
+          riderUpdate: riderUpdateResult,
+        });
+      } catch (error) {
+        console.error("Assign rider failed:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
     });
 
     // update rider status (approved, pending, cancelled)
