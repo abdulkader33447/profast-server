@@ -40,8 +40,8 @@ async function run() {
 
     const db = client.db("parcelDB");
     const usersCollection = db.collection("users");
-    const parcelCollection = db.collection("parcels");
-    const paymentCollection = db.collection("payments");
+    const parcelsCollection = db.collection("parcels");
+    const paymentsCollection = db.collection("payments");
     const trackingCollection = db.collection("tracking");
     const ridersCollection = db.collection("riders");
 
@@ -79,10 +79,21 @@ async function run() {
       }
       next();
     };
+
+    const verifyRider = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+
+      if (!user || user.role !== "rider") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
     //---------custom middlewares-------
 
     //get user for changing role
-    app.get("/user/search", async (req, res) => {
+    app.get("/user/search", verifyFBToken, async (req, res) => {
       const emailQuery = req.query.email;
       if (!emailQuery) {
         return res.status(400).send({ message: "Missing email query" });
@@ -135,7 +146,7 @@ async function run() {
     );
 
     //get users based on role
-    app.get("/user/role", async (req, res) => {
+    app.get("/user/role", verifyFBToken, async (req, res) => {
       const email = req.query.email;
       if (!email) {
         return res.status(400).send({ message: "Email query is required" });
@@ -156,7 +167,7 @@ async function run() {
     });
 
     //user already exists or not
-    app.post("/users", async (req, res) => {
+    app.post("/users",verifyFBToken, async (req, res) => {
       const email = req.body.email;
       const userExists = await usersCollection.findOne({ email });
 
@@ -185,28 +196,6 @@ async function run() {
       res.send(result);
     });
 
-    // parcels api
-    // app.get("/parcels", verifyFBToken, async (req, res) => {
-    //   try {
-    //     const { email } = req.query.email;
-
-    //     // যদি email দেওয়া থাকে, created_by দিয়ে ফিল্টার করবে, না থাকলে সব দেখাবে
-    //     const query = email ? { created_by: email } : {};
-
-    //     console.log("parcel query", req.query, query);
-    //     // সর্বশেষ parcel আগে দেখানোর জন্য sorted
-    //     const parcels = await parcelCollection
-    //       .find(query)
-    //       .sort({ createdAt: -1 }) // latest first
-    //       .toArray();
-
-    //     res.status(200).json(parcels);
-    //   } catch (error) {
-    //     console.error("GET /parcels error:", error);
-    //     res.status(500).json({ error: "Failed to get parcels" });
-    //   }
-    // });
-
     app.get("/parcels", verifyFBToken, async (req, res) => {
       try {
         const { email, payment_status, delivery_status } = req.query;
@@ -231,7 +220,7 @@ async function run() {
 
         console.log("parcel query", req.query, query);
 
-        const parcels = await parcelCollection.find(query, options).toArray();
+        const parcels = await parcelsCollection.find(query, options).toArray();
         res.send(parcels);
       } catch (error) {
         console.error("error fetching parcels:", error);
@@ -239,18 +228,73 @@ async function run() {
       }
     });
 
-    // sample GET route
-    // app.get("/parcels", async (req, res) => {
-    //   const parcels = await parcelCollection.find().toArray();
-    //   res.send(parcels);
-    // });
+    //get parcels for picked up or delivery
+    app.get("/rider/parcels", verifyFBToken, verifyRider, async (req, res) => {
+      try {
+        const email = req.query.email;
+
+        if (!email) {
+          return res.status(400).json({ message: "Rider email is required" });
+        }
+
+        const query = {
+          assignedRiderEmail: email,
+          delivery_status: { $in: ["rider_assigned", "in-transit"] },
+        };
+
+        const options = {
+          sort: { creation_date: -1 },
+        };
+
+        const parcels = await parcelsCollection.find(query, options).toArray();
+        res.status(200).json(parcels);
+      } catch (error) {
+        console.error("Error fetching rider's parcels:", error);
+        res.status(500).json({ message: "Failed to fetch rider parcels" });
+      }
+    });
+
+    //get completed parcels based on rider
+    app.get(
+      "/rider/parcels/completed",
+      verifyFBToken,
+      verifyRider,
+      async (req, res) => {
+        try {
+          const email = req.query.email;
+
+          if (!email) {
+            return res.status(400).json({ message: "Rider email is required" });
+          }
+
+          const query = {
+            assignedRiderEmail: email,
+            delivery_status: { $in: ["delivered", "service_center_delivered"] },
+          };
+
+          const options = {
+            sort: { creation_date: -1 },
+          };
+
+          const parcels = await parcelsCollection
+            .find(query, options)
+            .toArray();
+          res.status(200).json(parcels);
+        } catch (error) {
+          console.error("Error fetching completed deliveries:", error);
+          res
+            .status(500)
+            .json({ message: "Failed to fetch completed parcels" });
+        }
+      }
+    );
 
     //add parcel data to db
     app.post("/parcels", verifyFBToken, async (req, res) => {
       try {
         const newParcel = req.body;
 
-        const result = await parcelCollection.insertOne(newParcel);
+        const result = await parcelsCollection.insertOne(newParcel);
         res.status(201).send(result);
       } catch (err) {
         console.error("POST /parcels error:", err);
@@ -258,11 +302,11 @@ async function run() {
       }
     });
 
-    // Assuming: parcelCollection is your MongoDB collection
-    app.get("/parcels/:id", async (req, res) => {
+    // Assuming: parcelsCollection is your MongoDB collection
+    app.get("/parcels/:id",verifyFBToken, async (req, res) => {
       const id = req.params.id;
       try {
-        const parcel = await parcelCollection.findOne({
+        const parcel = await parcelsCollection.findOne({
           _id: new ObjectId(id),
         });
 
@@ -277,10 +321,70 @@ async function run() {
       }
     });
 
+    //cash out
+    app.patch("/parcels/:id/cashout",verifyFBToken,verifyRider, async (req, res) => {
+      const id = req.params.id;
+
+      try {
+        const parcel = await parcelsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!parcel) {
+          return res.status(404).send({ message: "Parcel not found" });
+        }
+
+        if (parcel.cashout_status === "cashed_out") {
+          return res.status(400).send({ message: "Already cashed out" });
+        }
+
+        const sameDistrict =
+          parcel.senderRegion?.toLowerCase() ===
+          parcel.receiverRegion?.toLowerCase();
+
+        const amount = Math.round(parcel.cost * (sameDistrict ? 0.3 : 0.4));
+
+        // Step 1: update parcel cashout
+        await parcelsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              cashout_status: "cashed_out",
+              cashed_out_at: new Date().toLocaleString("en-US", {
+                timeZone: "Asia/Dhaka",
+              }),
+            },
+          }
+        );
+
+        // Step 2: update rider earnings
+        await ridersCollection.updateOne(
+          { email: parcel.assignedRiderEmail },
+          {
+            $inc: {
+              pendingEarnings: -amount,
+              cashedOutEarnings: amount,
+            },
+            $set: {
+              "earningsHistory.$[elem].status": "cashed_out",
+            },
+          },
+          {
+            arrayFilters: [{ "elem.parcelId": new ObjectId(id) }],
+          }
+        );
+
+        res.send({ success: true, message: "Cashout successful", amount });
+      } catch (error) {
+        console.error("Cashout failed:", error);
+        res.status(500).send({ message: "Server error during cashout" });
+      }
+    });
+
     //delete data from db
     app.delete("/parcels/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
-      const result = await parcelCollection.deleteOne({
+      const result = await parcelsCollection.deleteOne({
         _id: new ObjectId(id),
       });
 
@@ -292,7 +396,7 @@ async function run() {
     });
 
     //--------riders api----------
-    app.post("/riders", async (req, res) => {
+    app.post("/riders",verifyFBToken, async (req, res) => {
       const rider = req.body;
       const result = await ridersCollection.insertOne(rider);
       res.send(result);
@@ -313,14 +417,6 @@ async function run() {
       }
     });
 
-    //get approved riders
-    // app.get("/riders/active", verifyFBToken, verifyAdmin, async (req, res) => {
-    //   const result = await ridersCollection
-    //     .find({ status: "approved" })
-    //     .toArray();
-    //   res.send(result);
-    // });
-
     app.get("/riders/active", verifyFBToken, verifyAdmin, async (req, res) => {
       const { district, city } = req.query;
 
@@ -338,29 +434,29 @@ async function run() {
     });
 
     // assign rider
-    app.patch("/parcels/:id/assign-rider", async (req, res) => {
+    app.patch("/parcels/:id/assign-rider",verifyFBToken, async (req, res) => {
       const parcelId = req.params.id;
-      const { riderId } = req.body;
+      const { riderId, riderName, riderEmail } = req.body;
 
       try {
-        // 1️⃣ Update parcel with assigned rider and in-transit status
-        const parcelUpdateResult = await parcelCollection.updateOne(
+        const parcelUpdateResult = await parcelsCollection.updateOne(
           { _id: new ObjectId(parcelId) },
           {
             $set: {
-              assignedRider: new ObjectId(riderId),
-              riderAssignedAt: new Date(),
-              delivery_status: "in-transit", // 🟡 updated
+              assignedRiderId: new ObjectId(riderId),
+              assignedRiderName: riderName,
+              assignedRiderEmail: riderEmail,
+              riderAssignedAt: new Date().toLocaleDateString("en-GB"),
+              delivery_status: "rider_assigned",
             },
           }
         );
 
-        // 2️⃣ Update rider's work_status
         const riderUpdateResult = await ridersCollection.updateOne(
           { _id: new ObjectId(riderId) },
           {
             $set: {
-              work_status: "in-delivery", // 🟢 new status
+              work_status: "in-delivery",
             },
           }
         );
@@ -373,6 +469,40 @@ async function run() {
       } catch (error) {
         console.error("Assign rider failed:", error);
         res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    //update parcels status
+    app.patch("/parcels/:id/status",verifyFBToken, async (req, res) => {
+      const parcelId = req.params.id;
+      const { delivery_status } = req.body;
+
+      const validStatuses = ["rider_assigned", "in-transit", "delivered"];
+      if (!validStatuses.includes(delivery_status)) {
+        return res.status(400).json({ message: "Invalid status value" });
+      }
+
+      try {
+        const updateDoc = {
+          $set: {
+            delivery_status,
+            ...(delivery_status === "in-transit" && {
+              pickedAt: new Date().toLocaleString(),
+            }),
+            ...(delivery_status === "delivered" && {
+              deliveredAt: new Date().toLocaleString(),
+            }),
+          },
+        };
+
+        const result = await parcelsCollection.updateOne(
+          { _id: new ObjectId(parcelId) },
+          updateDoc
+        );
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to update status" });
       }
     });
 
@@ -412,21 +542,6 @@ async function run() {
           }
         }
 
-        // if (status === " approved") {
-        //   // updateFields.role = "rider";
-        //   const useQuery = { email };
-        //   const userUpdateDoc = {
-        //     $set: {
-        //       role: "rider",
-        //     },
-        //   };
-        //   const roleResult = await usersCollection.updateOne(
-        //     useQuery,
-        //     userUpdateDoc
-        //   );
-        //   console.log(roleResult.modifiedCount);
-        // }
-
         try {
           const result = await ridersCollection.updateOne(
             { _id: new ObjectId(riderId) },
@@ -450,9 +565,143 @@ async function run() {
     );
 
     //---------------------------------------
+    // ➕ Add rider earnings API
+    app.post(
+      "/rider/earnings/add",
+      verifyFBToken,
+      verifyRider,
+      async (req, res) => {
+        const { parcelId, email } = req.body;
+
+        if (!email || !parcelId) {
+          return res.status(400).json({ message: "Missing required fields" });
+        }
+
+        try {
+          const parcel = await parcelsCollection.findOne({
+            _id: new ObjectId(parcelId),
+          });
+
+          if (!parcel) {
+            return res.status(404).json({ message: "Parcel not found" });
+          }
+
+          const rider = await ridersCollection.findOne({ email });
+
+          if (!rider) {
+            return res.status(404).json({ message: "Rider not found" });
+          }
+
+          // Prevent double entry
+          const alreadyLogged = await ridersCollection.findOne({
+            email,
+            "earningsHistory.parcelId": new ObjectId(parcelId),
+          });
+
+          if (alreadyLogged) {
+            return res
+              .status(409)
+              .json({ message: "Earnings already recorded" });
+          }
+
+          const sameDistrict = parcel.senderRegion === parcel.receiverRegion;
+          const percentage = sameDistrict ? 0.3 : 0.4;
+          const amount = Math.round(parcel.cost * percentage);
+
+          const updateResult = await ridersCollection.updateOne(
+            { email },
+            {
+              $inc: {
+                totalEarnings: amount,
+                pendingEarnings: amount,
+              },
+              $push: {
+                earningsHistory: {
+                  parcelId: new ObjectId(parcelId),
+                  amount,
+                  status: "pending",
+                  date: new Date(),
+                },
+              },
+            },
+            { upsert: true }
+          );
+
+          res.status(200).json({
+            success: true,
+            message: `Earnings (${amount}) updated successfully`,
+            updateResult,
+          });
+        } catch (error) {
+          console.error("Error updating earnings:", error);
+          res.status(500).json({ message: "Failed to update earnings" });
+        }
+      }
+    );
+
+    //get rider earning api
+    app.get("/rider/earnings", verifyFBToken, verifyRider, async (req, res) => {
+      try {
+        const email = req.query.email;
+
+        if (!email) {
+          return res.status(400).json({ message: "Rider email is required" });
+        }
+
+        const rider = await ridersCollection.findOne({ email });
+
+        if (!rider) {
+          return res.status(404).json({ message: "Rider not found" });
+        }
+
+        // এখানে ridersCollection এ ধরে নিচ্ছি নিম্নরূপ ফিল্ড আছে:
+        // totalEarnings, cashedOutEarnings, pendingEarnings, earningsHistory (array)
+
+        // তোমার প্রয়োজন অনুসারে আজ, এই সপ্তাহ, মাস, বছর ইত্যাদি হিসাব করতে চাইলে
+        // date-fns বা ম্যানুয়ালি JS দিয়ে ক্যালকুলেশন করতে হবে
+
+        // উদাহরণস্বরূপ, simplified response:
+        const total = rider.totalEarnings || 0;
+        const cashedOut = rider.cashedOutEarnings || 0;
+        const pending = rider.pendingEarnings || 0;
+
+        // আজ, সপ্তাহ, মাস, বছর ক্যালকুলেশন (earningsHistory এর ভিত্তিতে) - সহজ উদাহরণ:
+        const earningsHistory = rider.earningsHistory || [];
+
+        const now = new Date();
+
+        // ফিল্টার ফাংশন (example)
+        const earningsToday = earningsHistory
+          .filter((e) => {
+            const d = new Date(e.date);
+            return (
+              d.getFullYear() === now.getFullYear() &&
+              d.getMonth() === now.getMonth() &&
+              d.getDate() === now.getDate()
+            );
+          })
+          .reduce((sum, e) => sum + e.amount, 0);
+
+        // একইভাবে, সপ্তাহ, মাস, বছর হিসাব করো
+
+        // এখানে শুধু ডেমো, বাকিটা তোমার প্রয়োজনমত করো
+        res.json({
+          total,
+          cashedOut,
+          pending,
+          today: earningsToday,
+          week: 0, // TODO: calculate week earnings
+          month: 0, // TODO: calculate month earnings
+          year: 0, // TODO: calculate year earnings
+        });
+      } catch (error) {
+        console.error("Error fetching rider earnings:", error);
+        res.status(500).json({ message: "Failed to fetch rider earnings" });
+      }
+    });
 
     //tracking
-    app.post("/tracking", async (req, res) => {
+    app.post("/tracking",verifyFBToken, async (req, res) => {
       const {
         tracking_id,
         parcel_id,
@@ -485,7 +734,7 @@ async function run() {
 
         const query = email ? { userEmail: email } : {};
 
-        const history = await paymentCollection
+        const history = await paymentsCollection
           .find(query)
           .sort({ paymentTime: -1 }) // 🔽 Latest first
           .toArray();
@@ -497,7 +746,7 @@ async function run() {
       }
     });
 
-    app.post("/payments", async (req, res) => {
+    app.post("/payments",verifyFBToken, async (req, res) => {
       const {
         parcelId,
         email,
@@ -509,7 +758,7 @@ async function run() {
 
       try {
         // 1️⃣ Update parcel status
-        const updateResult = await parcelCollection.updateOne(
+        const updateResult = await parcelsCollection.updateOne(
           { _id: new ObjectId(parcelId) },
           { $set: { payment_status: "paid", transactionId } }
         );
@@ -524,7 +773,7 @@ async function run() {
           paymentTime: paymentTime || new Date(), // fallback to now
         };
 
-        const insertResult = await paymentCollection.insertOne(paymentData);
+        const insertResult = await paymentsCollection.insertOne(paymentData);
 
         res.send({
           success: true,
@@ -538,7 +787,7 @@ async function run() {
       }
     });
 
-    app.post("/create-payment-intent", async (req, res) => {
+    app.post("/create-payment-intent",verifyFBToken, async (req, res) => {
       const amountInCents = req.body.amountInCents;
       try {
         const paymentIntent = await stripe.paymentIntents.create({
