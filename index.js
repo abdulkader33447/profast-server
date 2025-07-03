@@ -3,6 +3,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const admin = require("firebase-admin");
+const { getWeek } = require("date-fns");
 
 // load env variables
 dotenv.config();
@@ -42,7 +43,7 @@ async function run() {
     const usersCollection = db.collection("users");
     const parcelsCollection = db.collection("parcels");
     const paymentsCollection = db.collection("payments");
-    const trackingCollection = db.collection("tracking");
+    const trackingsCollection = db.collection("trackings");
     const ridersCollection = db.collection("riders");
 
     //---------custom middlewares-------
@@ -167,7 +168,7 @@ async function run() {
     });
 
     //user already exists or not
-    app.post("/users",verifyFBToken, async (req, res) => {
+    app.post("/users", verifyFBToken, async (req, res) => {
       const email = req.body.email;
       const userExists = await usersCollection.findOne({ email });
 
@@ -303,7 +304,7 @@ async function run() {
     });
 
     // Assuming: parcelsCollection is your MongoDB collection
-    app.get("/parcels/:id",verifyFBToken, async (req, res) => {
+    app.get("/parcels/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       try {
         const parcel = await parcelsCollection.findOne({
@@ -322,64 +323,69 @@ async function run() {
     });
 
     //cash out
-    app.patch("/parcels/:id/cashout",verifyFBToken,verifyRider, async (req, res) => {
-      const id = req.params.id;
+    app.patch(
+      "/parcels/:id/cashout",
+      verifyFBToken,
+      verifyRider,
+      async (req, res) => {
+        const id = req.params.id;
 
-      try {
-        const parcel = await parcelsCollection.findOne({
-          _id: new ObjectId(id),
-        });
+        try {
+          const parcel = await parcelsCollection.findOne({
+            _id: new ObjectId(id),
+          });
 
-        if (!parcel) {
-          return res.status(404).send({ message: "Parcel not found" });
-        }
-
-        if (parcel.cashout_status === "cashed_out") {
-          return res.status(400).send({ message: "Already cashed out" });
-        }
-
-        const sameDistrict =
-          parcel.senderRegion?.toLowerCase() ===
-          parcel.receiverRegion?.toLowerCase();
-
-        const amount = Math.round(parcel.cost * (sameDistrict ? 0.3 : 0.4));
-
-        // Step 1: update parcel cashout
-        await parcelsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          {
-            $set: {
-              cashout_status: "cashed_out",
-              cashed_out_at: new Date().toLocaleString("en-US", {
-                timeZone: "Asia/Dhaka",
-              }),
-            },
+          if (!parcel) {
+            return res.status(404).send({ message: "Parcel not found" });
           }
-        );
 
-        // Step 2: update rider earnings
-        await ridersCollection.updateOne(
-          { email: parcel.assignedRiderEmail },
-          {
-            $inc: {
-              pendingEarnings: -amount,
-              cashedOutEarnings: amount,
-            },
-            $set: {
-              "earningsHistory.$[elem].status": "cashed_out",
-            },
-          },
-          {
-            arrayFilters: [{ "elem.parcelId": new ObjectId(id) }],
+          if (parcel.cashout_status === "cashed_out") {
+            return res.status(400).send({ message: "Already cashed out" });
           }
-        );
 
-        res.send({ success: true, message: "Cashout successful", amount });
-      } catch (error) {
-        console.error("Cashout failed:", error);
-        res.status(500).send({ message: "Server error during cashout" });
+          const sameDistrict =
+            parcel.senderRegion?.toLowerCase() ===
+            parcel.receiverRegion?.toLowerCase();
+
+          const amount = Math.round(parcel.cost * (sameDistrict ? 0.3 : 0.4));
+
+          // Step 1: update parcel cashout
+          await parcelsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                cashout_status: "cashed_out",
+                cashed_out_at: new Date().toLocaleString("en-US", {
+                  timeZone: "Asia/Dhaka",
+                }),
+              },
+            }
+          );
+
+          // Step 2: update rider earnings
+          await ridersCollection.updateOne(
+            { email: parcel.assignedRiderEmail },
+            {
+              $inc: {
+                pendingEarnings: -amount,
+                cashedOutEarnings: amount,
+              },
+              $set: {
+                "earningsHistory.$[elem].status": "cashed_out",
+              },
+            },
+            {
+              arrayFilters: [{ "elem.parcelId": new ObjectId(id) }],
+            }
+          );
+
+          res.send({ success: true, message: "Cashout successful", amount });
+        } catch (error) {
+          console.error("Cashout failed:", error);
+          res.status(500).send({ message: "Server error during cashout" });
+        }
       }
-    });
+    );
 
     //delete data from db
     app.delete("/parcels/:id", verifyFBToken, async (req, res) => {
@@ -396,7 +402,7 @@ async function run() {
     });
 
     //--------riders api----------
-    app.post("/riders",verifyFBToken, async (req, res) => {
+    app.post("/riders", verifyFBToken, async (req, res) => {
       const rider = req.body;
       const result = await ridersCollection.insertOne(rider);
       res.send(result);
@@ -434,7 +440,7 @@ async function run() {
     });
 
     // assign rider
-    app.patch("/parcels/:id/assign-rider",verifyFBToken, async (req, res) => {
+    app.patch("/parcels/:id/assign-rider", verifyFBToken, async (req, res) => {
       const parcelId = req.params.id;
       const { riderId, riderName, riderEmail } = req.body;
 
@@ -473,7 +479,7 @@ async function run() {
     });
 
     //update parcels status
-    app.patch("/parcels/:id/status",verifyFBToken, async (req, res) => {
+    app.patch("/parcels/:id/status", verifyFBToken, async (req, res) => {
       const parcelId = req.params.id;
       const { delivery_status } = req.body;
 
@@ -620,7 +626,7 @@ async function run() {
                   parcelId: new ObjectId(parcelId),
                   amount,
                   status: "pending",
-                  date: new Date(),
+                  date: new Date().toLocaleString(),
                 },
               },
             },
@@ -640,86 +646,106 @@ async function run() {
     );
 
     //get rider earning api
-    app.get("/rider/earnings", verifyFBToken, verifyRider, async (req, res) => {
+    app.get("/rider/earnings", async (req, res) => {
+      const email = req.query.email;
+
       try {
-        const email = req.query.email;
-
-        if (!email) {
-          return res.status(400).json({ message: "Rider email is required" });
-        }
-
         const rider = await ridersCollection.findOne({ email });
 
         if (!rider) {
-          return res.status(404).json({ message: "Rider not found" });
+          return res.status(404).send({ message: "Rider not found" });
         }
 
-        // এখানে ridersCollection এ ধরে নিচ্ছি নিম্নরূপ ফিল্ড আছে:
-        // totalEarnings, cashedOutEarnings, pendingEarnings, earningsHistory (array)
+        const today = new Date();
+        const currentYear = today.getFullYear();
+        const currentMonth = today.getMonth();
+        const currentDate = today.getDate();
+        const currentWeek = getWeek(today); // e.g., 27 for July 2, 2025
 
-        // তোমার প্রয়োজন অনুসারে আজ, এই সপ্তাহ, মাস, বছর ইত্যাদি হিসাব করতে চাইলে
-        // date-fns বা ম্যানুয়ালি JS দিয়ে ক্যালকুলেশন করতে হবে
+        const earnings = {
+          total: rider.totalEarnings || 0,
+          cashedOut: rider.cashedOutEarnings || 0,
+          pending: rider.pendingEarnings || 0,
+          today: 0,
+          week: 0,
+          month: 0,
+          year: 0,
+        };
 
-        // উদাহরণস্বরূপ, simplified response:
-        const total = rider.totalEarnings || 0;
-        const cashedOut = rider.cashedOutEarnings || 0;
-        const pending = rider.pendingEarnings || 0;
+        if (Array.isArray(rider.earningsHistory)) {
+          for (const record of rider.earningsHistory) {
+            const date = new Date(record.date);
+            const recordYear = date.getFullYear();
+            const recordMonth = date.getMonth();
+            const recordDate = date.getDate();
+            const recordWeek = getWeek(date);
 
-        // আজ, সপ্তাহ, মাস, বছর ক্যালকুলেশন (earningsHistory এর ভিত্তিতে) - সহজ উদাহরণ:
-        const earningsHistory = rider.earningsHistory || [];
+            if (recordYear === currentYear) {
+              earnings.year += record.amount;
 
-        const now = new Date();
+              if (recordMonth === currentMonth) {
+                earnings.month += record.amount;
 
-        // ফিল্টার ফাংশন (example)
-        const earningsToday = earningsHistory
-          .filter((e) => {
-            const d = new Date(e.date);
-            return (
-              d.getFullYear() === now.getFullYear() &&
-              d.getMonth() === now.getMonth() &&
-              d.getDate() === now.getDate()
-            );
-          })
-          .reduce((sum, e) => sum + e.amount, 0);
+                if (recordWeek === currentWeek) {
+                  earnings.week += record.amount;
 
-        // একইভাবে, সপ্তাহ, মাস, বছর হিসাব করো
+                  if (recordDate === currentDate) {
+                    earnings.today += record.amount;
+                  }
+                }
+              }
+            }
+          }
+        }
 
-        // এখানে শুধু ডেমো, বাকিটা তোমার প্রয়োজনমত করো
-        res.json({
-          total,
-          cashedOut,
-          pending,
-          today: earningsToday,
-          week: 0, // TODO: calculate week earnings
-          month: 0, // TODO: calculate month earnings
-          year: 0, // TODO: calculate year earnings
-        });
+        res.send(earnings);
       } catch (error) {
-        console.error("Error fetching rider earnings:", error);
-        res.status(500).json({ message: "Failed to fetch rider earnings" });
+        console.error("Error fetching earnings:", error);
+        res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
-    //tracking
-    app.post("/tracking",verifyFBToken, async (req, res) => {
-      const {
-        tracking_id,
-        parcel_id,
-        status,
-        message,
-        updated_by = "",
-      } = req.body;
+    //tracking API
+    app.post("/trackings", verifyFBToken, async (req, res) => {
+      const update = req.body;
 
-      const log = {
-        tracking_id,
-        parcel_id,
-        status,
-        message,
-        time: new Date(),
-        updated_by,
-      };
-      const result = await trackingCollection.insertOne(log);
+      update.timestamp = new Date();
+      if (!update.tracking_id || !update.status) {
+        return res
+          .status(400)
+          .json({ message: "tracking_id and status are required." });
+      }
+
+      // const {
+      //   tracking_id,
+      //   parcel_id,
+      //   status,
+      //   message,
+      //   updated_by = "",
+      // } = req.body;
+
+      // const log = {
+      //   tracking_id,
+      //   parcel_id,
+      //   status,
+      //   message,
+      //   timestamp: new Date(),
+      //   updated_by,
+      // };
+
+      const result = await trackingsCollection.insertOne(update);
       res.send({ success: true, insertedId: result.insertedId });
+    });
+
+    app.get("/trackings/:trackingId", async (req, res) => {
+      const trackingId = req.params.trackingId;
+
+      const updates = await trackingsCollection
+        .find({ tracking_id: trackingId })
+        .sort({ timestamp: 1 })
+        .toArray();
+
+      res.json(updates);
     });
 
     app.get("/payment-history", verifyFBToken, async (req, res) => {
@@ -746,7 +772,7 @@ async function run() {
       }
     });
 
-    app.post("/payments",verifyFBToken, async (req, res) => {
+    app.post("/payments", verifyFBToken, async (req, res) => {
       const {
         parcelId,
         email,
@@ -787,7 +813,7 @@ async function run() {
       }
     });
 
-    app.post("/create-payment-intent",verifyFBToken, async (req, res) => {
+    app.post("/create-payment-intent", verifyFBToken, async (req, res) => {
       const amountInCents = req.body.amountInCents;
       try {
         const paymentIntent = await stripe.paymentIntents.create({
