@@ -255,6 +255,64 @@ async function run() {
       }
     });
 
+    //get parcel status count by pipeline
+    app.get("/parcel/delivery/status-count", async (req, res) => {
+      const pipeline = [
+        {
+          $group: {
+            _id: "$delivery_status",
+            count: {
+              $sum: 1,
+            },
+          },
+        },
+        {
+          $project: {
+            status: "$_id",
+            count: 1,
+            _id: 0,
+          },
+        },
+      ];
+      const result = await parcelsCollection.aggregate(pipeline).toArray();
+      res.send(result);
+    });
+
+    //get rider status by pipeline
+    app.get("/parcel/rider-status-count", async (req, res) => {
+      const riderEmail = req.query.riderEmail;
+
+      if (!riderEmail) {
+        return res.status(400).json({ message: "Rider email is required" });
+      }
+
+      try {
+        const result = await parcelsCollection
+          .aggregate([
+            { $match: { assignedRiderEmail: riderEmail } },
+            {
+              $group: {
+                _id: "$delivery_status",
+                count: { $sum: 1 },
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                status: "$_id",
+                count: 1,
+              },
+            },
+          ])
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching rider status count:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
     //get completed parcels based on rider
     app.get(
       "/rider/parcels/completed",
