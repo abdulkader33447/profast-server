@@ -93,6 +93,36 @@ async function run() {
     };
     //---------custom middlewares-------
 
+    //user already exists or not
+    app.post("/users",  async (req, res) => {
+      const email = req.body.email;
+      const userExists = await usersCollection.findOne({ email });
+
+      const timeNow = new Date();
+      const readableTime = timeNow.toLocaleString("en-US", {
+        timeZone: "Asia/Dhaka",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+      if (userExists) {
+        // update last log in info
+        await usersCollection.updateOne(
+          { email },
+          { $set: { lastLogin: readableTime } }
+        );
+        return res
+          .status(200)
+          .send({ message: "User already exists", inserted: false });
+      }
+      const user = req.body;
+      const result = await usersCollection.insertOne(user);
+      res.send(result);
+    });
+
     //get user for changing role
     app.get("/user/search", verifyFBToken, async (req, res) => {
       const emailQuery = req.query.email;
@@ -167,35 +197,7 @@ async function run() {
       }
     });
 
-    //user already exists or not
-    app.post("/users", verifyFBToken, async (req, res) => {
-      const email = req.body.email;
-      const userExists = await usersCollection.findOne({ email });
-
-      const timeNow = new Date();
-      const readableTime = timeNow.toLocaleString("en-US", {
-        timeZone: "Asia/Dhaka",
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-      });
-      if (userExists) {
-        // update last log in info
-        await usersCollection.updateOne(
-          { email },
-          { $set: { lastLogin: readableTime } }
-        );
-        return res
-          .status(200)
-          .send({ message: "User already exists", inserted: false });
-      }
-      const user = req.body;
-      const result = await usersCollection.insertOne(user);
-      res.send(result);
-    });
+    
 
     app.get("/parcels", verifyFBToken, async (req, res) => {
       try {
